@@ -78,7 +78,7 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 	struct io_uring_sqe *sqe;
 	struct io_data *data;
 
-	data = malloc(size + sizeof(*data));
+	data = static_cast<io_data*>(malloc(size + sizeof(*data)));
 	if (!data)
 		return 1;
 
@@ -181,7 +181,7 @@ static int copy_file(struct io_uring *ring, off_t insize)
 			if (!cqe)
 				break;
 
-			data = io_uring_cqe_get_data(cqe);
+			data = static_cast<io_data*>(io_uring_cqe_get_data(cqe));
 			if (cqe->res < 0) {
 				if (cqe->res == -EAGAIN) {
 					queue_prepped(ring, data);
@@ -231,7 +231,7 @@ static int copy_file(struct io_uring *ring, off_t insize)
 			fprintf(stderr, "write res=%d\n", cqe->res);
 			return 1;
 		}
-		data = io_uring_cqe_get_data(cqe);
+		data = static_cast<io_data*>(io_uring_cqe_get_data(cqe));
 		free(data);
 		writes--;
 		io_uring_cqe_seen(ring, cqe);
