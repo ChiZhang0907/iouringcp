@@ -372,9 +372,11 @@ int main(int argc, char *argv[])
     if (check_io_uring) {
         if (setup_context(QD, &ring)) {
             printf("Do not support io_uring\n");
+			io_uring_queue_exit(&ring);
             exit(1);
         } else {
             printf("Support io_uring\n");
+			io_uring_queue_exit(&ring);
             exit(0);
         }
     }
