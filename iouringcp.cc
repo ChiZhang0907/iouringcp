@@ -190,7 +190,6 @@ static int copy_file(struct io_uring *ring, off_t insize)
 	while (insize || write_left) {
 		unsigned long had_reads;
 		int got_comp;
-
         if(speed_limitation > 0) {
             gettimeofday(&speed_time_tmp, NULL);
             speed_val = (speed_time_tmp.tv_sec * 1000000 + speed_time_tmp.tv_usec) - (speed_time.tv_sec * 1000000 + speed_time.tv_usec);
@@ -198,7 +197,7 @@ static int copy_file(struct io_uring *ring, off_t insize)
                 speed_time.tv_sec = speed_time_tmp.tv_sec;
                 speed_time.tv_usec = speed_time_tmp.tv_usec;
                 speed_size = 0;
-            } else if (speed_size >= speed_limitation) {
+            } else if (speed_size >= speed_size_limitation) {
                 useconds_t sleep_time = 1000000 - speed_val;
                 usleep(sleep_time);
                 gettimeofday(&speed_time, NULL);
@@ -226,7 +225,7 @@ static int copy_file(struct io_uring *ring, off_t insize)
 			offset += this_size;
             speed_size += this_size;
             reads++;
-            
+
             if(speed_limitation > 0 && speed_size >= speed_size_limitation) {
                 break;
             }
@@ -380,6 +379,7 @@ int main(int argc, char *argv[])
     }
 
 	if (!infd_path || !outfd_path) {
+        printf("Enter the input file and output file\n");
 		printf("%s -I infile -O outfile\n", iuc_program_name);
 		return 1;
 	}
