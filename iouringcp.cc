@@ -190,6 +190,7 @@ static int copy_file(struct io_uring *ring, off_t insize)
 	while (insize || write_left) {
 		unsigned long had_reads;
 		int got_comp;
+        
         if(speed_limitation > 0) {
             gettimeofday(&speed_time_tmp, NULL);
             speed_val = (speed_time_tmp.tv_sec * 1000000 + speed_time_tmp.tv_usec) - (speed_time.tv_sec * 1000000 + speed_time.tv_usec);
