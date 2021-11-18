@@ -2,19 +2,76 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdlib.h>
+#include <getopt.h>
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/ioctl.h>
 #include "liburing.h"
 
 #define QD	64
 #define BS	(32*1024)
 
+#define GET_LOWER_32BITS(v)  ((v) & 0xFFFFFFFF)
+
 static int infd, outfd;
+
+char *infd_path = NULL, *outfd_path = NULL;
+
+int speed_limitation = 0;
+
+char *iuc_program_name = NULL;
+
+bool check_io_uring = false;
+
+char const iuc_short_opts[] = "I:O:S:ah";
+
+const struct option iuc_long_opts[] = {
+    {"input",     1,  NULL,  'I'},
+    {"output",    1,  NULL,  'O'},
+    {"speed",     1,  NULL,  'S'},
+    {"available", 0,  NULL,  'a'},
+    {"help",      0,  NULL,  'h'},
+    {0,  0,  0,  0}
+};
+
+void try_help() {
+    fprintf(stdout, "Try  '%s --help' for more information.\n", iuc_program_name);
+    exit(1);
+}
+
+void help() {
+    static char const *const help_msg[] = {
+        "Copy file with io_uring",
+        "",
+        " -I,   --input      set the path of input file",
+        " -O,   --output     set the path of output file",
+        " -S,   --speed      set the speed limitaion (MB/s)",
+        " -a,   --available  check the environment for io_uring",
+        " -h,   --help       give this help message",
+        0
+    };
+
+    char const *const *p = help_msg;
+
+    while (*p) {
+        fprintf(stdout, "%s\n", *p++);
+    }
+}
+
+char* base_name(char *fname) {
+    char *p;
+    
+    if ((p = strrchr(fname, '/')) != NULL) {
+        fname = p + 1;
+    }
+
+    return fname;
+}
 
 struct io_data {
 	int read;
@@ -118,14 +175,36 @@ static int copy_file(struct io_uring *ring, off_t insize)
 	struct io_uring_cqe *cqe;
 	off_t write_left, offset;
 	int ret;
+    off_t speed_size = 0, speed_size_limitation = speed_limitation * 1024 * 1024;
+    useconds_t speed_val = 0;
+    struct timeval speed_time;
+    struct timeval speed_time_tmp;
 
 	write_left = insize;
 	writes = reads = offset = 0;
 
+    if (speed_limitation > 0) {
+        gettimeofday(&speed_time, NULL);
+    }
+
 	while (insize || write_left) {
 		unsigned long had_reads;
 		int got_comp;
-	
+
+        if(speed_limitation > 0) {
+            gettimeofday(&speed_time_tmp, NULL);
+            speed_val = (speed_time_tmp.tv_sec * 1000000 + speed_time_tmp.tv_usec) - (speed_time.tv_sec * 1000000 + speed_time.tv_usec);
+            if(speed_val > 1000000) {
+                speed_time.tv_sec = speed_time_tmp.tv_sec;
+                speed_time.tv_usec = speed_time_tmp.tv_usec;
+                speed_size = 0;
+            } else if (speed_size >= speed_limitation) {
+                useconds_t sleep_time = 1000000 - speed_val;
+                usleep(sleep_time);
+                gettimeofday(&speed_time, NULL);
+                speed_size = 0;
+            }
+        }
 		/*
 		 * Queue up as many reads as we can
 		 */
@@ -145,7 +224,12 @@ static int copy_file(struct io_uring *ring, off_t insize)
 
 			insize -= this_size;
 			offset += this_size;
-			reads++;
+            speed_size += this_size;
+            reads++;
+            
+            if(speed_limitation > 0 && speed_size >= speed_size_limitation) {
+                break;
+            }
 		}
 
 		if (had_reads != reads) {
@@ -246,26 +330,80 @@ int main(int argc, char *argv[])
 	off_t insize;
 	int ret;
 
-	if (argc < 3) {
-		printf("%s: infile outfile\n", argv[0]);
+    iuc_program_name = base_name(argv[0]);
+
+    while(true) {
+        int optc;
+        int long_idx = -1;
+        char *stop = NULL;
+        
+        optc = getopt_long(argc, argv, iuc_short_opts, iuc_long_opts, &long_idx);
+
+        if (optc < 0) {
+            break;
+        }
+
+        switch (optc) {
+            case 'I':
+                infd_path = optarg;
+                break;
+            case 'O':
+                outfd_path = optarg;
+                break;
+            case 'S':
+                speed_limitation = GET_LOWER_32BITS(strtoul(optarg, &stop, 0));
+                if (*stop != '\0' || ERANGE == errno || speed_limitation <= 0) {
+                    printf("Error speed limitation: %s\n", optarg);
+                    return 1;
+                }
+                break;
+            case 'a':
+                check_io_uring = true;
+                break;
+            case 'h':
+                help();
+                return 0;
+                break;
+            default:
+                try_help();
+        }
+    }
+
+    if (check_io_uring) {
+        if (setup_context(QD, &ring)) {
+            printf("Do not support io_uring\n");
+            exit(1);
+        } else {
+            printf("Support io_uring\n");
+            exit(0);
+        }
+    }
+
+	if (!infd_path || !outfd_path) {
+		printf("%s -I infile -O outfile\n", iuc_program_name);
 		return 1;
 	}
 
-	infd = open(argv[1], O_RDONLY);
+	infd = open(infd_path, O_RDONLY);
 	if (infd < 0) {
 		perror("open infile");
 		return 1;
 	}
-	outfd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	outfd = open(outfd_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (outfd < 0) {
 		perror("open outfile");
 		return 1;
 	}
 
-	if (setup_context(QD, &ring))
-		return 1;
-	if (get_file_size(infd, &insize))
-		return 1;
+	if (setup_context(QD, &ring)) {
+        perror("io_uring set");
+        return 1;
+    }
+
+	if (get_file_size(infd, &insize)) {
+        perror("file size");
+        return 1;
+    }
 
 	ret = copy_file(&ring, insize);
 
