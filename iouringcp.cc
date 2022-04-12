@@ -175,7 +175,7 @@ static int copy_file(struct io_uring *ring, off_t insize)
 	struct io_uring_cqe *cqe;
 	off_t write_left, offset;
 	int ret;
-    off_t speed_size = 0, speed_size_limitation = speed_limitation * 1024 * 1024;
+    off_t speed_size = 0, speed_size_limitation = speed_limitation * 1024 * 1024 / 10;
     useconds_t speed_val = 0;
     struct timeval speed_time;
     struct timeval speed_time_tmp;
@@ -194,12 +194,12 @@ static int copy_file(struct io_uring *ring, off_t insize)
         if(speed_limitation > 0) {
             gettimeofday(&speed_time_tmp, NULL);
             speed_val = (speed_time_tmp.tv_sec * 1000000 + speed_time_tmp.tv_usec) - (speed_time.tv_sec * 1000000 + speed_time.tv_usec);
-            if(speed_val > 1000000) {
+            if(speed_val > 100000) {
                 speed_time.tv_sec = speed_time_tmp.tv_sec;
                 speed_time.tv_usec = speed_time_tmp.tv_usec;
                 speed_size = 0;
             } else if (speed_size >= speed_size_limitation) {
-                useconds_t sleep_time = 1000000 - speed_val;
+                useconds_t sleep_time = 100000 - speed_val;
                 usleep(sleep_time);
                 gettimeofday(&speed_time, NULL);
                 speed_size = 0;
