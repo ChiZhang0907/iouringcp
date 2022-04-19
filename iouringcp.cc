@@ -51,7 +51,7 @@ void help() {
         "Copy file with io_uring",
         "",
         " -I,   --input      set the path of input file",
-        " -O,   --output     set the p50004ath of output file",
+        " -O,   --output     set the path of output file",
         " -S,   --speed      set the speed limitaion (MB/s)",
         " -a,   --available  check the environment for io_uring",
         " -h,   --help       give this help message",
@@ -80,6 +80,7 @@ struct io_data {
 	off_t first_offset, offset;
 	size_t first_len;
 	struct iovec iov;
+	bool last_chunk;
 };
 
 static int setup_context(unsigned entries, struct io_uring *ring)
@@ -137,6 +138,12 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 	struct io_uring_sqe *sqe;
 	struct io_data *data;
 	void* buffer;
+	bool last_chunk = false;
+
+	if (size < BS) {
+		size = BS;
+		last_chunk = true;
+	}
 
 	data = static_cast<io_data*>(malloc(sizeof(*data)));
 	buffer = aligned_alloc(4096, size);
@@ -156,6 +163,7 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 	data->iov.iov_base = buffer;
 	data->iov.iov_len = size;
 	data->first_len = size;
+	data->last_chunk = last_chunk;
 
 	io_uring_prep_readv(sqe, infd, &data->iov, 1, offset);
 	io_uring_sqe_set_data(sqe, data);
@@ -171,7 +179,7 @@ static void queue_write(struct io_uring *ring, struct io_data *data)
 	io_uring_submit(ring);
 }
 
-static int copy_file(struct io_uring *ring, off_t insize)
+static int copy_file(struct io_uring *ring, off_t insize, struct io_data** last_data)
 {
 	unsigned long reads, writes;
 	struct io_uring_cqe *cqe;
@@ -220,18 +228,11 @@ static int copy_file(struct io_uring *ring, off_t insize)
 				this_size = BS;
 			else if (!this_size)
 				break;
-			else if (this_size < BS) {
-				this_size = BS;
-			}
 
 			if (queue_read(ring, this_size, offset))
 				break;
 
-			if (insize < BS) {
-				insize = 0;
-			} else {
-				insize -= this_size;
-			}
+			insize -= this_size;
 			offset += this_size;
             speed_size += this_size;
             reads++;
@@ -286,29 +287,27 @@ static int copy_file(struct io_uring *ring, off_t insize)
 				return 1;
 			} else if ((size_t)cqe->res != data->iov.iov_len) {
 				/* Short read/write, adjust and requeue */
-				if (data->read) {
-					data->iov.iov_len = cqe -> res;
-				} else {
-					data->iov.iov_base += cqe->res;
-					data->iov.iov_len -= cqe->res;
-					data->offset += cqe->res;
+				if (data->last_chunk != true) {
 					queue_prepped(ring, data);
 					io_uring_cqe_seen(ring, cqe);
 					continue;
+				} else {
+					data->iov.iov_len = cqe -> res;
 				}
-			} else {
-				data->iov.iov_len = data->first_len;
 			}
-
 			/*
 			 * All done. if write, nothing else to do. if read,
 			 * queue up corresponding write.
 			 */
 			if (data->read) {
-				queue_write(ring, data);
+				if (data -> last_chunk != true) {
+					queue_write(ring, data);
+					writes++;
+				} else {
+					*last_data = data;
+				}
 				write_left -= data->iov.iov_len;
 				reads--;
-				writes++;
 			} else {
 				free(data->iov.iov_base);
 				free(data);
@@ -346,6 +345,7 @@ int main(int argc, char *argv[])
 	struct io_uring ring;
 	off_t insize;
 	int ret;
+	struct io_data* last_data = NULL;
 
     iuc_program_name = base_name(argv[0]);
 
@@ -408,7 +408,7 @@ int main(int argc, char *argv[])
 		perror("open infile");
 		return 1;
 	}
-	outfd = open(outfd_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	outfd = open(outfd_path, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
 	if (outfd < 0) {
 		perror("open outfile");
 		return 1;
@@ -424,10 +424,17 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-	ret = copy_file(&ring, insize);
+	ret = copy_file(&ring, insize, &last_data);
 
 	close(infd);
 	close(outfd);
 	io_uring_queue_exit(&ring);
+
+	if (last_data != NULL) {
+		outfd = open(outfd_path, O_WRONLY);
+		pwritev(outfd, &last_data->iov, 1, last_data->offset);
+		close(outfd);
+	}
+
 	return ret;
 }
