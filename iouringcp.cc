@@ -147,9 +147,9 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 		return 1;
 
 	if (size < BS) {
+		data->actual_size=size;
 		size = BS;
 		last_chunk = true;
-		data->actual_size=size;
 	}
 
 	sqe = io_uring_get_sqe(ring);
