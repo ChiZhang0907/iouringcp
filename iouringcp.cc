@@ -284,6 +284,7 @@ static int copy_file(struct io_uring *ring, off_t insize, struct io_data** last_
 			if (cqe->res < 0) {
 				if (cqe->res == -EAGAIN) {
 					queue_prepped(ring, data);
+					io_uring_submit(ring);
 					io_uring_cqe_seen(ring, cqe);
 					continue;
 				}
@@ -295,6 +296,7 @@ static int copy_file(struct io_uring *ring, off_t insize, struct io_data** last_
 					data->retry += 1;
 					if (data->retry < 10) {
 						queue_prepped(ring, data);
+						io_uring_submit(ring);
 						io_uring_cqe_seen(ring, cqe);	
 					} else {
 						exit(1);
@@ -308,6 +310,7 @@ static int copy_file(struct io_uring *ring, off_t insize, struct io_data** last_
 				data->retry += 1;
 				if (data->retry < 10) {
 					queue_prepped(ring, data);
+					io_uring_submit(ring);
 					io_uring_cqe_seen(ring, cqe);	
 				} else {
 					exit(1);
