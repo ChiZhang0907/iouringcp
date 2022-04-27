@@ -81,6 +81,7 @@ struct io_data {
 	size_t first_len;
 	struct iovec iov;
 	bool last_chunk;
+	size_t actual_size;
 };
 
 static int setup_context(unsigned entries, struct io_uring *ring)
@@ -140,15 +141,16 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 	void* buffer;
 	bool last_chunk = false;
 
-	if (size < BS) {
-		size = BS;
-		last_chunk = true;
-	}
-
 	data = static_cast<io_data*>(malloc(sizeof(*data)));
 	buffer = aligned_alloc(4096, size);
 	if (!data)
 		return 1;
+
+	if (size < BS) {
+		size = BS;
+		last_chunk = true;
+		data->actual_size=size;
+	}
 
 	sqe = io_uring_get_sqe(ring);
 	if (!sqe) {
@@ -285,15 +287,19 @@ static int copy_file(struct io_uring *ring, off_t insize, struct io_data** last_
 				fprintf(stderr, "cqe failed: %s\n",
 						strerror(-cqe->res));
 				return 1;
-			} else if ((size_t)cqe->res != data->iov.iov_len) {
-				/* Short read/write, adjust and requeue */
-				if (data->last_chunk != true) {
+			} else if (data->last_chunk) {
+				if ((size_t)cqe->res < data->actual_size) {
 					queue_prepped(ring, data);
 					io_uring_cqe_seen(ring, cqe);
 					continue;
 				} else {
-					data->iov.iov_len = cqe -> res;
+					data->iov.iov_len = data->actual_size;
 				}
+			} else if ((size_t)cqe->res != data->iov.iov_len) {
+				/* Short read/write, adjust and requeue */
+				queue_prepped(ring, data);
+				io_uring_cqe_seen(ring, cqe);
+				continue;
 			}
 			/*
 			 * All done. if write, nothing else to do. if read,
