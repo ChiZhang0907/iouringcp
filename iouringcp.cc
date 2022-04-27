@@ -82,6 +82,7 @@ struct io_data {
 	struct iovec iov;
 	bool last_chunk;
 	size_t actual_size;
+	int retry;
 };
 
 static int setup_context(unsigned entries, struct io_uring *ring)
@@ -166,6 +167,7 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 	data->iov.iov_len = size;
 	data->first_len = size;
 	data->last_chunk = last_chunk;
+	data->retry = 0;
 
 	io_uring_prep_readv(sqe, infd, &data->iov, 1, offset);
 	io_uring_sqe_set_data(sqe, data);
@@ -176,6 +178,7 @@ static void queue_write(struct io_uring *ring, struct io_data *data)
 {
 	data->read = 0;
 	data->offset = data->first_offset;
+	data->retry = 0;
 
 	queue_prepped(ring, data);
 	io_uring_submit(ring);
@@ -289,16 +292,26 @@ static int copy_file(struct io_uring *ring, off_t insize, struct io_data** last_
 				return 1;
 			} else if (data->last_chunk) {
 				if ((size_t)cqe->res < data->actual_size) {
-					queue_prepped(ring, data);
-					io_uring_cqe_seen(ring, cqe);
+					data->retry += 1;
+					if (data->retry < 10) {
+						queue_prepped(ring, data);
+						io_uring_cqe_seen(ring, cqe);	
+					} else {
+						exit(1);
+					}
 					continue;
 				} else {
 					data->iov.iov_len = data->actual_size;
 				}
 			} else if ((size_t)cqe->res != data->iov.iov_len) {
 				/* Short read/write, adjust and requeue */
-				queue_prepped(ring, data);
-				io_uring_cqe_seen(ring, cqe);
+				data->retry += 1;
+				if (data->retry < 10) {
+					queue_prepped(ring, data);
+					io_uring_cqe_seen(ring, cqe);	
+				} else {
+					exit(1);
+				}
 				continue;
 			}
 			/*
