@@ -143,7 +143,6 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 	bool last_chunk = false;
 
 	data = static_cast<io_data*>(malloc(sizeof(*data)));
-	buffer = aligned_alloc(4096, size);
 	if (!data)
 		return 1;
 
@@ -153,6 +152,7 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 		last_chunk = true;
 	}
 
+	buffer = aligned_alloc(4096, size);
 	sqe = io_uring_get_sqe(ring);
 	if (!sqe) {
 		free(buffer);
